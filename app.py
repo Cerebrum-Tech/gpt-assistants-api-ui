@@ -3,10 +3,15 @@ import time
 import base64
 import re
 import json
-
+from PIL import Image
+from io import BytesIO
+import time
+import glob
+import base64
+import re
 import streamlit as st
 import openai
-from openai.types.beta.threads import MessageContentImageFile
+from openai.types.beta.threads import ImageFileContentBlock
 from tools import TOOL_MAP
 
 
@@ -24,9 +29,10 @@ else:
     client = openai.OpenAI(api_key=openai_api_key)
 assistant_id = os.environ.get("ASSISTANT_ID")
 instructions = os.environ.get("RUN_INSTRUCTIONS", "")
-assistant_title = os.environ.get("ASSISTANT_TITLE", "Assistants API UI")
+assistant_title = os.environ.get(
+    "ASSISTANT_TITLE", "Cere Code Interpreter Demo")
 enabled_file_upload_message = os.environ.get(
-    "ENABLED_FILE_UPLOAD_MESSAGE", "Upload a file"
+    "ENABLED_FILE_UPLOAD_MESSAGE", "Dosya yükleyin"
 )
 
 
@@ -72,42 +78,57 @@ def get_message_value_list(messages):
     for message in messages:
         message_content = ""
         print(message)
-        if not isinstance(message, MessageContentImageFile):
+        if (message.content[0].type != "image_file"):
+            print(message)
             message_content = message.content[0].text
             annotations = message_content.annotations
+            citations = []
+            for index, annotation in enumerate(annotations):
+                message_content.value = message_content.value.replace(
+                    annotation.text, f" [{index}]"
+                )
+
+                if file_citation := getattr(annotation, "file_citation", None):
+                    cited_file = client.files.retrieve(file_citation.file_id)
+                    citations.append(
+                        f"[{index}] {file_citation.quote} from {cited_file.filename}"
+                    )
+                elif file_path := getattr(annotation, "file_path", None):
+                    link_tag = create_file_link(
+                        annotation.text.split("/")[-1], file_path.file_id
+                    )
+                    message_content.value = re.sub(
+                        r"\[(.*?)\]\s*\(\s*(.*?)\s*\)", link_tag, message_content.value
+                    )
+
+            message_content.value += "\n" + "\n".join(citations)
+            messages_value_list.append(message_content.value)
         else:
-            image_file = client.files.retrieve(message.file_id)
+            image_file = client.files.content(
+                message.content[0].image_file.file_id)
+
+            # read image file
+            image_data_bytes = image_file.content
+            image_data_base64 = base64.b64encode(image_data_bytes).decode()
+            image_tag = f'<img src="data:image/png;base64,{image_data_base64}" width="400">'
+            message_content = st.markdown(image_tag, True)
             messages_value_list.append(
-                f"Click <here> to download {image_file.filename}"
+                f"{image_tag}\n\n"
             )
-        citations = []
-        for index, annotation in enumerate(annotations):
-            message_content.value = message_content.value.replace(
-                annotation.text, f" [{index}]"
-            )
+            content_blocks = message.content
+            for block in content_blocks:
+                if block.type == 'text':  # Find the block with type 'text'
+                    text = block.text.value  # Access the text content
+                    messages_value_list.append(text)
 
-            if file_citation := getattr(annotation, "file_citation", None):
-                cited_file = client.files.retrieve(file_citation.file_id)
-                citations.append(
-                    f"[{index}] {file_citation.quote} from {cited_file.filename}"
-                )
-            elif file_path := getattr(annotation, "file_path", None):
-                link_tag = create_file_link(
-                    annotation.text.split("/")[-1], file_path.file_id
-                )
-                message_content.value = re.sub(
-                    r"\[(.*?)\]\s*\(\s*(.*?)\s*\)", link_tag, message_content.value
-                )
-
-        message_content.value += "\n" + "\n".join(citations)
-        messages_value_list.append(message_content.value)
         return messages_value_list
 
 
 def get_message_list(thread, run):
     completed = False
     while not completed:
-        run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread.id, run_id=run.id)
         print("run.status:", run.status)
         messages = client.beta.threads.messages.list(thread_id=thread.id)
         print("messages:", "\n".join(get_message_value_list(messages)))
@@ -150,7 +171,7 @@ def get_response(user_input, file):
                         hasattr(tool_call, "code_interpreter")
                         and tool_call.code_interpreter.input != ""
                     ):
-                        input_code = f"### code interpreter\ninput:\n```python\n{tool_call.code_interpreter.input}\n```"
+                        input_code = f"### Kod yazılıyor\nGirdi:\n```python\n{tool_call.code_interpreter.input}\n```"
                         print(input_code)
                         if len(
                             st.session_state.tool_calls
@@ -190,9 +211,11 @@ def execute_action(run, thread):
         print("name:", tool_function_name)
         print("arguments:", tool_function_arguments)
 
-        tool_function_output = TOOL_MAP[tool_function_name](**tool_function_arguments)
+        tool_function_output = TOOL_MAP[tool_function_name](
+            **tool_function_arguments)
         print("tool_function_output", tool_function_output)
-        tool_outputs.append({"tool_call_id": tool_id, "output": tool_function_output})
+        tool_outputs.append(
+            {"tool_call_id": tool_id, "output": tool_function_output})
 
     run = client.beta.threads.runs.submit_tool_outputs(
         thread_id=thread.id,
@@ -259,12 +282,13 @@ def main():
         file = None
         if uploaded_file is not None:
             file = handle_uploaded_file(uploaded_file)
-        with st.spinner("Wait for response..."):
+        with st.spinner("Cevap Bekleniyor..."):
             response = get_response(user_msg, file)
         with st.chat_message("Assistant"):
             st.markdown(response, True)
 
-        st.session_state.chat_log.append({"name": "assistant", "msg": response})
+        st.session_state.chat_log.append(
+            {"name": "assistant", "msg": response})
         st.session_state.in_progress = False
         st.session_state.tool_call = None
         st.rerun()
