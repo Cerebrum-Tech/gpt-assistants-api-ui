@@ -14,10 +14,12 @@ import openai
 from openai.types.beta.threads import ImageFileContentBlock
 from tools import TOOL_MAP
 from dotenv import load_dotenv
+import streamlit as st
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
 
 load_dotenv()
-
-
 
 azure_openai_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
 azure_openai_key = os.environ.get("AZURE_OPENAI_KEY")
@@ -81,9 +83,9 @@ def get_message_value_list(messages):
     messages_value_list = []
     for message in messages:
         message_content = ""
-        print(message)
+        print('ekin')
         if (message.content[0].type != "image_file"):
-            print(message)
+           
             message_content = message.content[0].text
             annotations = message_content.annotations
             citations = []
@@ -133,9 +135,9 @@ def get_message_list(thread, run):
     while not completed:
         run = client.beta.threads.runs.retrieve(
             thread_id=thread.id, run_id=run.id)
-        print("run.status:", run.status)
+      
         messages = client.beta.threads.messages.list(thread_id=thread.id)
-        print("messages:", "\n".join(get_message_value_list(messages)))
+        print("messages:",get_message_value_list(messages))
         if run.status == "completed":
             completed = True
         elif run.status == "failed":
@@ -150,6 +152,7 @@ def get_message_list(thread, run):
 def get_response(user_input, file):
     if "thread" not in st.session_state:
         st.session_state.thread = create_thread(user_input, file)
+        print("thread:", st.session_state.thread)
     else:
         create_message(st.session_state.thread, user_input, file)
     run = create_run(st.session_state.thread)
@@ -158,7 +161,7 @@ def get_response(user_input, file):
     )
 
     while run.status == "in_progress":
-        print("run.status:", run.status)
+     
 
         time.sleep(1)
         run = client.beta.threads.runs.retrieve(
@@ -167,33 +170,33 @@ def get_response(user_input, file):
         run_steps = client.beta.threads.runs.steps.list(
             thread_id=st.session_state.thread.id, run_id=run.id
         )
-        print("run_steps:", run_steps)
-        for step in run_steps.data:
-            if hasattr(step.step_details, "tool_calls"):
-                for tool_call in step.step_details.tool_calls:
-                    if (
-                        hasattr(tool_call, "code_interpreter")
-                        and tool_call.code_interpreter.input != ""
-                    ):
-                        input_code = f"### Kod yazılıyor\nGirdi:\n```python\n{tool_call.code_interpreter.input}\n```"
-                        print(input_code)
-                        if len(
-                            st.session_state.tool_calls
-                        ) == 0 or tool_call.id not in [
-                            x.id for x in st.session_state.tool_calls
-                        ]:
-                            st.session_state.tool_calls.append(tool_call)
-                            with st.chat_message("Assistant"):
-                                st.markdown(
-                                    input_code,
-                                    True,
-                                )
-                                st.session_state.chat_log.append(
-                                    {
-                                        "name": "assistant",
-                                        "msg": input_code,
-                                    }
-                                )
+        
+        # for step in run_steps.data:
+        #     if hasattr(step.step_details, "tool_calls"):
+        #         for tool_call in step.step_details.tool_calls:
+        #             if (
+        #                 hasattr(tool_call, "code_interpreter")
+        #                 and tool_call.code_interpreter.input != ""
+        #             ):
+        #                 input_code = f"### Kod yazılıyor\nGirdi:\n```python\n{tool_call.code_interpreter.input}\n```"
+        #                 # print(input_code)
+        #                 if len(
+        #                     st.session_state.tool_calls
+        #                 ) == 0 or tool_call.id not in [
+        #                     x.id for x in st.session_state.tool_calls
+        #                 ]:
+        #                     st.session_state.tool_calls.append(tool_call)
+        #                     with st.chat_message("Assistant"):
+        #                         st.markdown(
+        #                             input_code,
+        #                             True,
+        #                         )
+        #                         st.session_state.chat_log.append(
+        #                             {
+        #                                 "name": "assistant",
+        #                                 "msg": input_code,
+        #                             }
+        #                         )
 
     if run.status == "requires_action":
         print("run.status:", run.status)
@@ -255,49 +258,64 @@ def disable_form():
 
 
 def main():
-    st.title(assistant_title)
-    user_msg = st.chat_input(
-        "Message", on_submit=disable_form, disabled=st.session_state.in_progress
-    )
-    if enabled_file_upload_message:
-        uploaded_file = st.sidebar.file_uploader(
-            enabled_file_upload_message,
-            type=[
-                "txt",
-                "pdf",
-                "png",
-                "jpg",
-                "jpeg",
-                "csv",
-                "json",
-                "geojson",
-                "xlsx",
-                "xls",
-            ],
-            disabled=st.session_state.in_progress,
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    
+    if not st.session_state.logged_in:
+        st.title("Giriş Yapın")
+        username = st.text_input("Kullanıcı Adı")
+        password = st.text_input("Şifre", type="password")
+        if st.button("Giriş Yap"):
+            # Burada giriş doğrulaması yapılabilir
+            if username == "admin" and password == "1234":
+                st.success("Başarıyla giriş yapıldı!")
+                st.session_state.logged_in = True
+            else:
+                st.error("Geçersiz kullanıcı adı veya şifre. Lütfen tekrar deneyin.")
+    
+    
+    if st.session_state.logged_in:
+        st.title('Welcome')
+        user_msg = st.chat_input(
+            "Message", on_submit=disable_form, disabled=st.session_state.in_progress
         )
-    else:
-        uploaded_file = None
-    if user_msg:
+        if enabled_file_upload_message:
+            uploaded_file = st.sidebar.file_uploader(
+                enabled_file_upload_message,
+                type=[
+                    "txt",
+                    "pdf",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "csv",
+                    "json",
+                    "geojson",
+                    "xlsx",
+                    "xls",
+                ],
+                disabled=st.session_state.in_progress,
+            )
+        else:
+            uploaded_file = None
+        if user_msg:
+            render_chat()
+            with st.chat_message("user"):
+                st.markdown(user_msg, True)
+            st.session_state.chat_log.append({"name": "user", "msg": user_msg})
+            file = None
+            if uploaded_file is not None:
+                file = handle_uploaded_file(uploaded_file)
+            with st.spinner("Cevap Bekleniyor..."):
+                response = get_response(user_msg, file)
+            with st.chat_message("Assistant"):
+                st.markdown(response, True)
+            st.session_state.chat_log.append(
+                {"name": "assistant", "msg": response})
+            st.session_state.in_progress = False
+            st.session_state.tool_call = None
+            st.rerun()
         render_chat()
-        with st.chat_message("user"):
-            st.markdown(user_msg, True)
-        st.session_state.chat_log.append({"name": "user", "msg": user_msg})
-        file = None
-        if uploaded_file is not None:
-            file = handle_uploaded_file(uploaded_file)
-        with st.spinner("Cevap Bekleniyor..."):
-            response = get_response(user_msg, file)
-        with st.chat_message("Assistant"):
-            st.markdown(response, True)
-
-        st.session_state.chat_log.append(
-            {"name": "assistant", "msg": response})
-        st.session_state.in_progress = False
-        st.session_state.tool_call = None
-        st.rerun()
-    render_chat()
-
 
 if __name__ == "__main__":
     main()
